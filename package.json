@@ -1,0 +1,14 @@
+{
+  "name": "node-script-runner",
+"version": "1.0.0",
+"private": true,
+  "scripts": {
+    "start": "node index.js",
+    "mbi": "node add_to_cart_mbi.js",
+    "souqelite": "node add_to_cart_souqelite.js",
+    "scheduler": "node scheduler.js"
+  },
+  "dependencies": {
+    "puppeteer": "^24.34.0"
+  }
+}
