@@ -1,0 +1,25 @@
+name: Run scheduler script
+
+on:
+  workflow_dispatch:   # Manual run (button se)
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours (optional)
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run script
+        run: node scheduler.js
