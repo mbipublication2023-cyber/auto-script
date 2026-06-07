@@ -1,9 +1,9 @@
-name: Run scheduler script
+name: Run MBI Checkout Script
 
 on:
-  workflow_dispatch:   # Manual run (button se)
+  workflow_dispatch:   # Manual run (via button)
   schedule:
-    - cron: "0 */6 * * *"   # every 6 hours (optional)
+    - cron: "0 */6 * * *"   # Run every 6 hours
 
 jobs:
   run-script:
@@ -16,10 +16,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci || npm install
 
       - name: Run script
-        run: node scheduler.js
+        run: node add_to_cart_mbi.js
+
+      - name: Upload Debug Screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkout-screenshot
+          path: |
+            final_checkout_debug.png
+            fatal_error.png
+          if-no-files-found: ignore
