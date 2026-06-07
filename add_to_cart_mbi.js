@@ -253,6 +253,42 @@ const puppeteer = require('puppeteer');
         await page.screenshot({ path: ssPath, fullPage: true });
         console.log(`Screenshot: ${ssPath}`);
 
+        // ── 10. Write Log to File ─────────────────────────────────────────────
+        try {
+            const logPath = path.resolve(__dirname, 'execution_log.json');
+            let logData = {};
+            if (fs.existsSync(logPath)) {
+                try {
+                    logData = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+                } catch (_) {}
+            }
+            
+            // Increment today's order count
+            const todayStr = new Date().toISOString().split('T')[0];
+            if (state === 'success') {
+                logData[todayStr] = (logData[todayStr] || 0) + 1;
+            }
+
+            // Save detailed orders array
+            if (!logData.orders) logData.orders = [];
+            logData.orders.push({
+                timestamp: new Date().toISOString(),
+                localTime: new Date().toLocaleString(),
+                website: 'mbi.com.pk',
+                status: state.toUpperCase(),
+                customer: `${u.firstName || ''} ${u.lastName || ''}`.trim(),
+                email: u.email,
+                phone: u.phone,
+                url: page.url()
+            });
+
+            fs.writeFileSync(logPath, JSON.stringify(logData, null, 2));
+            const successOrders = logData.orders.filter(o => o.status === 'SUCCESS').length;
+            console.log(`   ✔ Log updated in execution_log.json (Today's count: ${logData[todayStr] || 0} | Total successful orders: ${successOrders})`);
+        } catch (logErr) {
+            console.warn('   WARN: Could not write log to file:', logErr.message);
+        }
+
     } catch (err) {
         console.error('FATAL:', err.message);
         try {
