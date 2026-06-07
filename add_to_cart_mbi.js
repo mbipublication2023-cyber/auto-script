@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer');
 
 (async () => {
     const browser = await puppeteer.launch({
-        headless: false,
+        headless: process.env.CI ? true : false,
         defaultViewport: null,
         args: [
             '--start-maximized',
