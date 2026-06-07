@@ -1,7 +1,6 @@
 const puppeteer = require('puppeteer');
 
 (async () => {
-    // 1. Launch Browser
     const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: null,
@@ -15,230 +14,252 @@ const puppeteer = require('puppeteer');
         ]
     });
     const page = await browser.newPage();
-
     await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    try {
-        console.log('--- Starting Script: Cart & Checkout Automation (Debug Mode) ---');
-
-        // 1. Goto mbi.com.pk
-        console.log('1. Navigating to mbi.com.pk...');
-        await page.goto('https://mbi.com.pk', { waitUntil: 'networkidle2', timeout: 60000 });
-
-        // 2. Close modal
+    // ─── Helper: fill field by typing (fires native events) ──────────────────
+    const typeInto = async (selector, value) => {
         try {
-            const closeBtnSelector = '.close-popup, .p-close, .popup-close, .modal-close, i.fa-times';
-            const closeBtn = await page.waitForSelector(closeBtnSelector, { timeout: 3000, visible: true });
-            if (closeBtn) {
-                console.log('   Modal detected. Closing...');
-                await closeBtn.click();
+            await page.waitForSelector(selector, { visible: true, timeout: 4000 });
+            await page.click(selector, { clickCount: 3 }); // select all existing text
+            await page.keyboard.press('Backspace');
+            await page.type(selector, String(value), { delay: 40 });
+            // Trigger framework events
+            await page.evaluate(sel => {
+                const el = document.querySelector(sel);
+                if (!el) return;
+                ['input', 'change', 'blur'].forEach(evt =>
+                    el.dispatchEvent(new Event(evt, { bubbles: true }))
+                );
+            }, selector);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    };
+
+    // ─── Helper: try multiple selectors to fill a field ────────────────────────
+    const fillField = async (selectors, value, label) => {
+        for (const sel of selectors) {
+            const ok = await typeInto(sel, value);
+            if (ok) {
+                console.log(`   ✔ Filled ${label} (using: ${sel})`);
+                return true;
             }
-        } catch (e) { /* ignore */ }
-
-        // Helper to get links
-        const getProductLinks = async () => {
-            return await page.$$eval('.wc-block-grid__product-link, .product-title a, .woocommerce-loop-product__link', els => els.map(e => e.href));
-        };
-
-        const allLinks = await getProductLinks();
-        // Filter valid product links
-        const productLinks = [...new Set(allLinks)].filter(l => !l.endsWith('mbi.com.pk/') && !l.includes('/cart/') && !l.includes('/my-account/'));
-
-        if (productLinks.length < 2) throw new Error('Not enough products found.');
-
-        // 3. Select Product 1 & Add
-        const link1 = productLinks[Math.floor(Math.random() * productLinks.length)];
-        console.log(`3. Selected Product 1: ${link1}`);
-        await page.goto(link1, { waitUntil: 'domcontentloaded' });
-
-        console.log('4. Clicking Add to Cart...');
-        try {
-            const btnSelector = 'button.single_add_to_cart_button';
-            await page.waitForSelector(btnSelector, { timeout: 10000 });
-            await page.click(btnSelector);
-            await new Promise(r => setTimeout(r, 2000));
-        } catch (e) {
-            console.error('   Failed to click Add to Cart (Product 1)');
         }
+        console.warn(`   ✖ WARN: Could not fill ${label}`);
+        return false;
+    };
 
-        // 5. Select Product 2 & Add
-        let link2 = productLinks[Math.floor(Math.random() * productLinks.length)];
-        while (link2 === link1) link2 = productLinks[Math.floor(Math.random() * productLinks.length)];
+    try {
+        console.log('--- Shopify Fake Order Script (mbi.com.pk) ---');
 
+        // ── 1. Products from /collections/all ────────────────────────────────
+        console.log('1. Collecting products...');
+        await page.goto('https://mbi.com.pk/collections/all', { waitUntil: 'networkidle2', timeout: 60000 });
+        await new Promise(r => setTimeout(r, 3000));
 
-        console.log(`5. Selected Product 2: ${link2}`);
-        await page.goto(link2, { waitUntil: 'domcontentloaded' });
+        const productLinks = await page.$$eval(
+            'a[href*="/products/"]',
+            els => [...new Set(els.map(e => e.href).filter(h => h.includes('/products/') && !h.includes('?')))]
+        );
+        console.log(`   Found ${productLinks.length} products.`);
+        if (!productLinks.length) throw new Error('No products found on /collections/all');
 
-        console.log('6. Clicking Add to Cart...');
-        try {
-            const btnSelector = 'button.single_add_to_cart_button';
-            await page.waitForSelector(btnSelector, { timeout: 10000 });
-            await page.click(btnSelector);
-            await new Promise(r => setTimeout(r, 2000));
-        } catch (e) {
-            console.error('   Failed to click Add to Cart (Product 2)');
-        }
-
-        // 7. Proceed to Checkout
-        console.log('7. Proceeding to Checkout...');
-        await page.goto('http://mbi.com.pk/checkout/', { waitUntil: 'networkidle2' });
-
-        // Generate Random Data
-        // Load users from users.json
+        // ── 2. Load user ──────────────────────────────────────────────────────
         const fs = require('fs');
         const path = require('path');
-        const usersPath = path.resolve(__dirname, 'users.json');
-
-        let selectedUser;
+        let u;
         try {
-            const usersData = fs.readFileSync(usersPath, 'utf8');
-            const users = JSON.parse(usersData);
-            console.log(users.length)
-            if (users.length > 0) {
-                selectedUser = users[Math.floor(Math.random() * users.length)];
-                console.log(`   Loaded ${users.length} users. Selected: ${selectedUser.firstName} ${selectedUser.lastName}`);
-            } else {
-                throw new Error('users.json is empty');
-            }
+            const users = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'users.json'), 'utf8'));
+            u = users[Math.floor(Math.random() * users.length)];
+            console.log(`2. User: ${u.firstName} ${u.lastName} | ${u.email} | ${u.phone}`);
         } catch (err) {
-            console.error('   Failed to load users.json, falling back to random data:', err.message);
-            // Fallback to random data if file fails
-            const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-            selectedUser = {
-                firstName: `User${randomInt(100, 999)}`,
-                lastName: `Test${randomInt(100, 999)}`,
-                address: `House ${randomInt(1, 100)}, Street ${randomInt(1, 20)}`,
-                city: 'Karachi',
-                zip: '75000',
-                phone: `0300${randomInt(1000000, 9999999)}`,
-                email: `automator${randomInt(1000, 9999)}@test.com`
+            const ri = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+            u = {
+                firstName: `Test${ri(100, 999)}`, lastName: `User${ri(100, 999)}`,
+                address: `House ${ri(1, 99)}, Street ${ri(1, 20)}, Gulshan-e-Iqbal`,
+                city: 'Karachi', zip: '75300',
+                phone: `0300${ri(1000000, 9999999)}`,
+                email: `fake${ri(1000, 9999)}@example.com`
             };
+            console.log(`2. Fallback user: ${u.firstName} ${u.lastName}`);
         }
 
-        const { firstName: fname, lastName: lname, address, city, zip, phone, email } = selectedUser;
-
-        console.log(`   Data: ${fname} ${lname}, ${address}, ${phone}`);
-
-        // 8. Fill Form (JS)
-        console.log('8. Filling Checkout Form (via JS)...');
-
-        // Handle "Ship to different address" FIRST because it triggers AJAX
-        await page.evaluate(() => {
-            const shipCheck = document.querySelector('#ship-to-different-address-checkbox');
-            if (shipCheck && shipCheck.checked) {
-                shipCheck.click();
+        // ── 3 & 4. Add 2 random products to cart ─────────────────────────────
+        const shuffled = [...productLinks].sort(() => Math.random() - 0.5).slice(0, 2);
+        for (let i = 0; i < shuffled.length; i++) {
+            console.log(`${3 + i}. Adding: ${shuffled[i]}`);
+            await page.goto(shuffled[i], { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await new Promise(r => setTimeout(r, 2000));
+            let added = false;
+            for (const sel of ['button[name="add"]', 'form[action*="/cart/add"] button[type="submit"]', 'button.product-form__submit', 'button#AddToCart']) {
+                try {
+                    await page.waitForSelector(sel, { timeout: 4000 });
+                    await page.click(sel);
+                    console.log(`   ✔ Added via ${sel}`);
+                    added = true;
+                    break;
+                } catch (_) {}
             }
-        });
+            if (!added) console.warn(`   ✖ Could not add product ${i + 1}`);
+            await new Promise(r => setTimeout(r, 3000));
+        }
 
-        console.log('   Waiting for potential AJAX after checkbox...');
-        await new Promise(r => setTimeout(r, 4000));
-
-        const fillField = async (sel, val) => {
-            await page.waitForSelector(sel, { visible: true, timeout: 5000 }).catch(() => { });
-            await page.evaluate((selector, value) => {
-                const el = document.querySelector(selector);
-                if (el) {
-                    el.value = value;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new Event('blur', { bubbles: true }));
-                }
-            }, sel, val);
-        };
-
-        await fillField('#billing_first_name', fname);
-        await fillField('#billing_last_name', lname);
-        await fillField('#billing_address_1', address);
-        await fillField('#billing_city', city);
-        await fillField('#billing_postcode', zip);
-        await fillField('#billing_phone', phone);
-        await fillField('#billing_email', email);
-
-        // Check Terms
-        await page.evaluate(() => {
-            const terms = document.querySelector('#terms');
-            if (terms && !terms.checked) terms.click();
-        });
-
-        // Wait for ajax before submit
+        // ── 5. Go to cart ─────────────────────────────────────────────────────
+        console.log('5. Cart...');
+        await page.goto('https://mbi.com.pk/cart', { waitUntil: 'networkidle2', timeout: 30000 });
         await new Promise(r => setTimeout(r, 2000));
 
-
-        // Submit
-        console.log('   Submitting Order...');
-        await page.evaluate(() => {
-            const overlays = document.querySelectorAll('.blockUI');
-            overlays.forEach(el => el.remove());
-        });
-
-        const placeOrderBtn = '#place_order';
-        await page.waitForSelector(placeOrderBtn);
-        await page.evaluate((sel) => document.querySelector(sel).click(), placeOrderBtn);
-
-        console.log('   Clicked Place Order. Polling for 30s...');
-
-        // Poll for state
-        const startTime = Date.now();
-        let finalState = 'timeout';
-
-        while (Date.now() - startTime < 30000) {
-            const currentUrl = page.url();
-
-            // Check Success
-            if (currentUrl.includes('order-received')) {
-                console.log('   SUCCESS: Landed on Order Received page!');
-                finalState = 'success';
+        // ── 6. Checkout ───────────────────────────────────────────────────────
+        console.log('6. Checkout...');
+        let reachedCheckout = false;
+        for (const sel of ['button[name="checkout"]', 'input[name="checkout"]', 'button.cart__checkout-button', 'a[href="/checkout"]']) {
+            try {
+                await page.waitForSelector(sel, { timeout: 4000 });
+                await page.click(sel);
+                reachedCheckout = true;
                 break;
-            }
+            } catch (_) {}
+        }
+        if (!reachedCheckout) {
+            await page.goto('https://mbi.com.pk/checkout', { waitUntil: 'networkidle2', timeout: 30000 });
+        }
 
-            // Check Cart Redirect
-            if (currentUrl.includes('/cart') || await page.$('.cart-empty')) {
-                // Double check if empty
-                const emptyMsg = await page.$('.cart-empty');
-                if (emptyMsg) {
-                    console.log('   WARNING: Redirected to Empty Cart page.');
-                    finalState = 'empty_cart';
+        await new Promise(r => setTimeout(r, 6000));
+        console.log(`   URL: ${page.url()}`);
+
+        // ── 7. Fill checkout form ─────────────────────────────────────────────
+        console.log('7. Filling form...');
+
+        // Contact: email or phone field
+        await fillField(
+            ['input#email', 'input[name="email"]', 'input[placeholder*="Email"]', 'input[placeholder*="mobile phone"]'],
+            u.email,
+            'email'
+        );
+
+        // First Name
+        await fillField(
+            ['input[name="firstName"]', 'input[placeholder*="First name"]', 'input[placeholder*="first name"]'],
+            u.firstName,
+            'firstName'
+        );
+
+        // Last Name
+        await fillField(
+            ['input[name="lastName"]', 'input[placeholder*="Last name"]', 'input[placeholder*="last name"]'],
+            u.lastName,
+            'lastName'
+        );
+
+        // Address — Shopify shows a single "Address" field with autocomplete
+        // We need to try standard name, or placeholder, dismiss autocomplete, and type freely
+        let addressFilled = false;
+        const addressSelectors = ['input[name="address1"]', 'input[placeholder*="Address"]', 'input[placeholder*="address"]'];
+        for (const sel of addressSelectors) {
+            try {
+                await page.waitForSelector(sel, { visible: true, timeout: 3000 });
+                await page.click(sel, { clickCount: 3 });
+                await page.keyboard.press('Backspace');
+                await page.type(sel, u.address, { delay: 60 });
+                // Press Escape to dismiss autocomplete dropdown
+                await page.keyboard.press('Escape');
+                await new Promise(r => setTimeout(r, 500));
+                // Trigger events
+                await page.evaluate(selectorStr => {
+                    const el = document.querySelector(selectorStr);
+                    if (el) ['input', 'change', 'blur'].forEach(e => el.dispatchEvent(new Event(e, { bubbles: true })));
+                }, sel);
+                console.log(`   ✔ Filled address (using: ${sel})`);
+                addressFilled = true;
+                break;
+            } catch (_) {}
+        }
+        if (!addressFilled) {
+            console.warn('   ✖ WARN: Could not fill address');
+        }
+
+        // City
+        await fillField(
+            ['input[name="city"]', 'input[placeholder*="City"]', 'input[placeholder*="city"]'],
+            u.city,
+            'city'
+        );
+
+        // Postal/Zip
+        await fillField(
+            ['input[name="postalCode"]', 'input[placeholder*="Postal"]', 'input[placeholder*="postal"]', 'input[placeholder*="ZIP"]'],
+            u.zip,
+            'postalCode'
+        );
+
+        // Phone
+        await fillField(
+            ['input[name="phone"]', 'input[placeholder*="Phone"]', 'input[placeholder*="phone"]'],
+            u.phone,
+            'phone'
+        );
+
+        await new Promise(r => setTimeout(r, 2000));
+
+        // ── 8. Submit ─────────────────────────────────────────────────────────
+        console.log('8. Submitting...');
+        // Try pay / continue button
+        const btnSels = ['button#checkout-pay-button', 'button[type="submit"]'];
+        for (const sel of btnSels) {
+            try {
+                const btn = await page.$(sel);
+                if (btn) {
+                    const isDisabled = await page.evaluate(el => el.disabled, btn);
+                    console.log(`   Button "${sel}" disabled=${isDisabled}`);
+                    await page.evaluate(el => el.click(), btn);
+                    console.log(`   Clicked: ${sel}`);
                     break;
                 }
-            }
+            } catch (_) {}
+        }
 
-            // Check Error
-            const errorMsg = await page.$eval('.woocommerce-error', el => el.textContent.trim()).catch(() => null);
-            if (errorMsg) {
-                console.log(`   FORM ERROR: ${errorMsg}`);
-                finalState = 'error';
+        // ── 9. Poll ───────────────────────────────────────────────────────────
+        console.log('9. Polling for result (60s)...');
+        const t0 = Date.now();
+        let state = 'timeout';
+
+        while (Date.now() - t0 < 60000) {
+            const url = page.url();
+            if (url.includes('thank_you') || url.includes('thank-you') || url.includes('order_id')) {
+                console.log(`   ✔ SUCCESS: ${url}`);
+                state = 'success';
                 break;
             }
-
+            if (url.includes('/payment') || url.includes('/delivery') || url.includes('/shipping')) {
+                console.log(`   ✔ Progressing in checkout: ${url}`);
+                state = 'checkout_progress';
+                break;
+            }
+            const errEl = await page.$('[data-testid="error"], .notice--error, .field__message--error').catch(() => null);
+            if (errEl) {
+                const txt = await page.evaluate(el => el.textContent.trim(), errEl).catch(() => '');
+                console.log(`   ✖ Error: ${txt}`);
+                state = 'form_error';
+                break;
+            }
             await new Promise(r => setTimeout(r, 1000));
         }
 
-        // Check if form was reset
+        console.log(`\n=== RESULT: ${state.toUpperCase()} ===`);
+        console.log(`=== URL: ${page.url()} ===\n`);
+
+        const ssPath = path.resolve(__dirname, 'final_checkout_debug.png');
+        await page.screenshot({ path: ssPath, fullPage: true });
+        console.log(`Screenshot: ${ssPath}`);
+
+    } catch (err) {
+        console.error('FATAL:', err.message);
         try {
-            const firstNameVal = await page.$eval('#billing_first_name', el => el.value);
-            if (!firstNameVal) {
-                console.log('   OBSERVATION: Billing First Name is EMPTY. The form was RESET.');
-            } else {
-                console.log(`   OBSERVATION: Billing First Name still has value: "${firstNameVal}". Form NOT reset.`);
-            }
-        } catch (e) {
-            console.log('   Could not check form value: ' + e.message);
-        }
-
-        console.log(`   Final State: ${finalState} `);
-        console.log(`   End URL: ${page.url()} `);
-
-        // const screenshotPath = require('path').resolve('final_checkout_debug.png');
-        // await page.screenshot({ path: screenshotPath, fullPage: true });
-        console.log(`   Saved screenshot: ${screenshotPath} `);
-
-    } catch (error) {
-        console.error('Script Failed:', error);
-        // await page.screenshot({ path: 'fatal_error.png' });
+            await page.screenshot({ path: require('path').resolve(__dirname, 'fatal_error.png') });
+        } catch (_) {}
     } finally {
-        console.log('--- Finished. Closing in 10s ---');
-        setTimeout(async () => {
-            await browser.close();
-        }, 10000);
+        console.log('--- Done. Closing in 10s ---');
+        setTimeout(() => browser.close(), 10000);
     }
 })();
